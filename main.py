@@ -4,10 +4,15 @@ from pyray import *
 import sys
 import os
 
-def resource_path(relative_path):
-    if hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.abspath("."), relative_path)
+def resource_path(relative_path: str) -> str:
+    if getattr(sys, "frozen", False):
+        # PyInstaller extracts to this temp folder
+        base_path = sys._MEIPASS
+    else:
+        # Normal Python execution
+        base_path = os.path.abspath(".")
+    _return = os.path.join(base_path, relative_path)
+    return _return
 
 SCREEN_WIDTH = 900
 SCREEN_HEIGHT = 650
@@ -305,7 +310,9 @@ class Game:
 init_window(SCREEN_WIDTH, SCREEN_HEIGHT, "ZayfireStudios - ZayDroids")
 set_target_fps(60)
 random.seed()
-icon = load_image(resource_path("favicon.png"))
+
+icon_path = resource_path("favicon.png")
+icon = load_image(resource_path(icon_path))
 set_window_icon(icon)
 unload_image(icon)
 
