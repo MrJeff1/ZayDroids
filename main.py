@@ -1,6 +1,13 @@
 import math
 import random
 from pyray import *
+import sys
+import os
+
+def resource_path(relative_path):
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 SCREEN_WIDTH = 900
 SCREEN_HEIGHT = 650
@@ -222,7 +229,7 @@ class Game:
 
         self.player.update(dt)
 
-        if is_key_down(KEY_SPACE):
+        if is_key_down(KEY_SPACE) or is_mouse_button_pressed(0):
             bullet = self.player.shoot()
             if bullet:
                 self.bullets.append(bullet)
@@ -295,10 +302,10 @@ class Game:
             draw_text(sub, (SCREEN_WIDTH - sw) // 2, SCREEN_HEIGHT // 2 + 20, 20, RAYWHITE)
 
 
-init_window(SCREEN_WIDTH, SCREEN_HEIGHT, "ZayDroids - Asteroids")
+init_window(SCREEN_WIDTH, SCREEN_HEIGHT, "ZayfireStudios - ZayDroids")
 set_target_fps(60)
 random.seed()
-icon = load_image("favicon.png")
+icon = load_image(resource_path("favicon.png"))
 set_window_icon(icon)
 unload_image(icon)
 
