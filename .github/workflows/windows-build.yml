@@ -29,11 +29,11 @@ jobs:
       # 4️⃣ Build EXE
       - name: Build EXE
         run: |
-          pyinstaller --onefile main.py --name ShooterGame --noconsole --icon favicon.ico
+          pyinstaller --onefile main.py --name ZayDroids --noconsole --icon favicon.ico
 
       # 5️⃣ Upload EXE as artifact
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: ShooterGame-Windows
-          path: dist/ShooterGame.exe
+          name: ZayDroids-Windows
+          path: dist/ZayDroids.exe
