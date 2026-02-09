@@ -1,58 +1,28 @@
-// Required includes
 #include "raylib.h"
 #include <cmath>
-#include <random>
 #include <vector>
-#include <algorithm>
-#include <string>
 #include <cstdlib>
-#include <map>
-
-// Platform-specific includes for resource path handling
-#ifdef _WIN32
-#include <windows.h>
+#include <ctime>
+#include <algorithm>
+#ifndef PLATFORM_WEB
+#include "favicon.h"
+#endif
+#if defined(PLATFORM_WEB)
+#include <emscripten/emscripten.h>
+#endif
+#ifdef __EMSCRIPTEN__
+#include <emscripten/html5.h>
 #endif
 
-// Function to get resource path (equivalent to Python's resource_path function)
-std::string resource_path(const std::string &relative_path)
-{
-    std::string base_path;
-
-#ifdef _WIN32
-    // Check if running as a bundled executable
-    char buffer[MAX_PATH];
-    GetModuleFileNameA(NULL, buffer, MAX_PATH);
-    std::string exe_path(buffer);
-    size_t pos = exe_path.find_last_of("\\/");
-    if (pos != std::string::npos)
-    {
-        base_path = exe_path.substr(0, pos);
-    }
-    else
-    {
-        base_path = ".";
-    }
-#else
-    // For other platforms, use current directory
-    base_path = ".";
-#endif
-
-    // Combine base path with relative path
-    std::string result = base_path;
-    if (!result.empty() && result.back() != '/' && result.back() != '\\')
-    {
-        result += "/";
-    }
-    result += relative_path;
-    return result;
-}
-
+// --------------------------------------------------
 // Constants
+// --------------------------------------------------
+
 const int SCREEN_WIDTH = 900;
 const int SCREEN_HEIGHT = 650;
 
 const float SHIP_RADIUS = 12.0f;
-const float SHIP_TURN_SPEED = 3.5f; // radians/sec
+const float SHIP_TURN_SPEED = 3.5f;
 const float SHIP_ACCEL = 260.0f;
 const float SHIP_FRICTION = 0.98f;
 const float SHIP_MAX_SPEED = 360.0f;
@@ -62,98 +32,159 @@ const float BULLET_LIFETIME = 1.2f;
 const float BULLET_COOLDOWN = 0.18f;
 
 const float ASTEROID_BASE_SPEED = 40.0f;
-const std::vector<int> ASTEROID_SIZES = {3, 2, 1}; // 3=large,2=med,1=small
-const std::map<int, float> ASTEROID_RADII = {{3, 42.0f}, {2, 26.0f}, {1, 14.0f}};
 
 const int LIVES_START = 3;
 
-// Random number generator
-std::random_device rd;
-std::mt19937 gen(rd());
+// --------------------------------------------------
+// Utility
+// --------------------------------------------------
 
-// Utility functions
-Vector2 wrap_position(Vector2 pos)
+Vector2 WrapPosition(Vector2 pos)
 {
     if (pos.x < 0)
-    {
         pos.x += SCREEN_WIDTH;
-    }
     else if (pos.x > SCREEN_WIDTH)
-    {
         pos.x -= SCREEN_WIDTH;
-    }
+
     if (pos.y < 0)
-    {
         pos.y += SCREEN_HEIGHT;
-    }
     else if (pos.y > SCREEN_HEIGHT)
-    {
         pos.y -= SCREEN_HEIGHT;
-    }
+
     return pos;
 }
 
-Vector2 vec_from_angle(float angle)
+Vector2 VecFromAngle(float angle)
 {
-    return Vector2{std::cos(angle), std::sin(angle)};
+    return {cosf(angle), sinf(angle)};
 }
 
-float vec_len(Vector2 v)
+float VecLen(Vector2 v)
 {
-    return std::hypot(v.x, v.y);
+    return sqrtf(v.x * v.x + v.y * v.y);
 }
 
-Vector2 vec_scale(Vector2 v, float s)
+Vector2 VecScale(Vector2 v, float s)
 {
-    return Vector2{v.x * s, v.y * s};
+    return {v.x * s, v.y * s};
 }
 
-Vector2 vec_add(Vector2 a, Vector2 b)
+Vector2 VecAdd(Vector2 a, Vector2 b)
 {
-    return Vector2{a.x + b.x, a.y + b.y};
+    return {a.x + b.x, a.y + b.y};
 }
 
-Vector2 vec_sub(Vector2 a, Vector2 b)
+Vector2 VecClampLength(Vector2 v, float maxLen)
 {
-    return Vector2{a.x - b.x, a.y - b.y};
-}
-
-Vector2 vec_clamp_length(Vector2 v, float max_len)
-{
-    float length = vec_len(v);
-    if (length > max_len && length > 0)
+    float len = VecLen(v);
+    if (len > maxLen && len > 0)
     {
-        float scale = max_len / length;
-        return vec_scale(v, scale);
+        float scale = maxLen / len;
+        return VecScale(v, scale);
     }
     return v;
 }
 
-bool circle_collision(Vector2 p1, float r1, Vector2 p2, float r2)
+bool CircleCollision(Vector2 p1, float r1, Vector2 p2, float r2)
 {
     float dx = p1.x - p2.x;
     float dy = p1.y - p2.y;
     return (dx * dx + dy * dy) <= (r1 + r2) * (r1 + r2);
 }
 
-Vector2 random_asteroid_velocity(int size)
+float RandomRange(float min, float max)
 {
-    std::uniform_real_distribution<float> angle_dist(0.0f, 2.0f * M_PI);
-    std::uniform_real_distribution<float> speed_dist(0.0f, 40.0f);
-
-    float angle = angle_dist(gen);
-    float speed = ASTEROID_BASE_SPEED + speed_dist(gen) + (3 - size) * 20.0f;
-    return vec_scale(vec_from_angle(angle), speed);
+    return min + (float)rand() / (float)RAND_MAX * (max - min);
 }
 
-// Forward declarations
-class Bullet;
-class Asteroid;
-
-// Player class
-class Player
+Vector2 RandomAsteroidVelocity(int size)
 {
-public:
+    float angle = RandomRange(0, PI * 2);
+    float speed = ASTEROID_BASE_SPEED + RandomRange(0, 40) + (3 - size) * 20;
+    return VecScale(VecFromAngle(angle), speed);
+}
+
+// --------------------------------------------------
+// Bullet
+// --------------------------------------------------
+
+struct Bullet
+{
+    Vector2 pos;
+    Vector2 vel;
+    float life;
+
+    Bullet(Vector2 p, Vector2 v)
+        : pos(p), vel(v), life(BULLET_LIFETIME) {}
+
+    void Update(float dt)
+    {
+        pos = VecAdd(pos, VecScale(vel, dt));
+        pos = WrapPosition(pos);
+        life -= dt;
+    }
+
+    void Draw() const
+    {
+        DrawCircleV(pos, 2, YELLOW);
+    }
+};
+
+// --------------------------------------------------
+// Asteroid
+// --------------------------------------------------
+
+struct Asteroid
+{
+    Vector2 pos;
+    Vector2 vel;
+    int size;
+    float radius;
+    std::vector<Vector2> points;
+
+    Asteroid(Vector2 p, int s) : pos(p), size(s)
+    {
+        radius = (s == 3 ? 42 : s == 2 ? 26
+                                       : 14);
+        vel = RandomAsteroidVelocity(size);
+        GenerateShape();
+    }
+
+    void GenerateShape()
+    {
+        int count = GetRandomValue(10, 14);
+        points.clear();
+        for (int i = 0; i < count; i++)
+        {
+            float angle = (float)i / count * PI * 2;
+            float r = radius * RandomRange(0.7f, 1.1f);
+            points.push_back({cosf(angle) * r, sinf(angle) * r});
+        }
+    }
+
+    void Update(float dt)
+    {
+        pos = VecAdd(pos, VecScale(vel, dt));
+        pos = WrapPosition(pos);
+    }
+
+    void Draw() const
+    {
+        for (size_t i = 0; i < points.size(); i++)
+        {
+            Vector2 a = VecAdd(pos, points[i]);
+            Vector2 b = VecAdd(pos, points[(i + 1) % points.size()]);
+            DrawLineV(a, b, LIGHTGRAY);
+        }
+    }
+};
+
+// --------------------------------------------------
+// Player
+// --------------------------------------------------
+
+struct Player
+{
     Vector2 pos;
     Vector2 vel;
     float angle;
@@ -163,446 +194,282 @@ public:
 
     Player()
     {
-        pos = Vector2{SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f};
-        vel = Vector2{0.0f, 0.0f};
-        angle = -M_PI / 2.0f;
-        cooldown = 0.0f;
-        invuln = 0.0f;
-        alive = true;
+        Reset();
     }
 
-    void reset()
+    void Reset()
     {
-        pos = Vector2{SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f};
-        vel = Vector2{0.0f, 0.0f};
-        angle = -M_PI / 2.0f;
-        cooldown = 0.0f;
+        pos = {SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f};
+        vel = {0, 0};
+        angle = -PI / 2;
+        cooldown = 0;
         invuln = 2.0f;
         alive = true;
     }
 
-    void update(float dt)
+    void Update(float dt)
     {
         if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A))
-        {
             angle -= SHIP_TURN_SPEED * dt;
-        }
         if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D))
-        {
             angle += SHIP_TURN_SPEED * dt;
-        }
 
         if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W))
         {
-            Vector2 thrust = vec_scale(vec_from_angle(angle), SHIP_ACCEL * dt);
-            vel = vec_add(vel, thrust);
+            Vector2 thrust = VecScale(VecFromAngle(angle), SHIP_ACCEL * dt);
+            vel = VecAdd(vel, thrust);
         }
 
-        vel = vec_scale(vel, std::pow(SHIP_FRICTION, dt * 60.0f));
-        vel = vec_clamp_length(vel, SHIP_MAX_SPEED);
+        vel = VecScale(vel, powf(SHIP_FRICTION, dt * 60));
+        vel = VecClampLength(vel, SHIP_MAX_SPEED);
 
-        pos = vec_add(pos, vec_scale(vel, dt));
-        pos = wrap_position(pos);
+        pos = VecAdd(pos, VecScale(vel, dt));
+        pos = WrapPosition(pos);
 
         if (cooldown > 0)
-        {
             cooldown -= dt;
-        }
         if (invuln > 0)
-        {
             invuln -= dt;
-        }
     }
 
-    Bullet *shoot(); // Forward declaration, implemented after Bullet class
-
-    void draw()
+    bool CanShoot() const
     {
-        Vector2 dir_vec = vec_from_angle(angle);
-        Vector2 right_vec = vec_from_angle(angle + 2.5f);
-        Vector2 left_vec = vec_from_angle(angle - 2.5f);
+        return cooldown <= 0;
+    }
 
-        Vector2 p1 = vec_add(pos, vec_scale(dir_vec, SHIP_RADIUS + 8.0f));
-        Vector2 p2 = vec_add(pos, vec_scale(right_vec, SHIP_RADIUS));
-        Vector2 p3 = vec_add(pos, vec_scale(left_vec, SHIP_RADIUS));
+    Bullet Shoot()
+    {
+        cooldown = BULLET_COOLDOWN;
+        Vector2 dir = VecFromAngle(angle);
+        Vector2 p = VecAdd(pos, VecScale(dir, SHIP_RADIUS + 6));
+        Vector2 v = VecAdd(vel, VecScale(dir, BULLET_SPEED));
+        return Bullet(p, v);
+    }
 
-        Color color = WHITE;
-        if (invuln > 0 && static_cast<int>(invuln * 10.0f) % 2 == 0)
-        {
-            color = Color{255, 255, 255, 80};
-        }
+    void Draw() const
+    {
+        Vector2 dir = VecFromAngle(angle);
+        Vector2 right = VecFromAngle(angle + 2.5f);
+        Vector2 left = VecFromAngle(angle - 2.5f);
 
-        DrawTriangle(p1, p2, p3, color);
+        Vector2 p1 = VecAdd(pos, VecScale(dir, SHIP_RADIUS + 8));
+        Vector2 p2 = VecAdd(pos, VecScale(right, SHIP_RADIUS));
+        Vector2 p3 = VecAdd(pos, VecScale(left, SHIP_RADIUS));
+
+        Color c = WHITE;
+        if (invuln > 0 && ((int)(invuln * 10) % 2 == 0))
+            c = Fade(WHITE, 0.3f);
+
+        DrawTriangle(p1, p2, p3, c);
         DrawTriangleLines(p1, p2, p3, SKYBLUE);
     }
 };
 
-// Bullet class
-class Bullet
+// --------------------------------------------------
+// Game
+// --------------------------------------------------
+
+struct Game
 {
-public:
-    Vector2 pos;
-    Vector2 vel;
-    float life;
-
-    Bullet(Vector2 pos_, Vector2 vel_)
-    {
-        pos = Vector2{pos_.x, pos_.y};
-        vel = Vector2{vel_.x, vel_.y};
-        life = BULLET_LIFETIME;
-    }
-
-    void update(float dt)
-    {
-        pos = vec_add(pos, vec_scale(vel, dt));
-        pos = wrap_position(pos);
-        life -= dt;
-    }
-
-    void draw()
-    {
-        DrawCircleV(pos, 2.0f, YELLOW);
-    }
-};
-
-// Implement Player::shoot() after Bullet class definition
-Bullet *Player::shoot()
-{
-    if (cooldown <= 0)
-    {
-        Vector2 dir_vec = vec_from_angle(angle);
-        Vector2 bullet_pos = vec_add(pos, vec_scale(dir_vec, SHIP_RADIUS + 6.0f));
-        Vector2 bullet_vel = vec_add(vel, vec_scale(dir_vec, BULLET_SPEED));
-        cooldown = BULLET_COOLDOWN;
-        return new Bullet(bullet_pos, bullet_vel);
-    }
-    return nullptr;
-}
-
-// Asteroid class
-class Asteroid
-{
-public:
-    Vector2 pos;
-    int size;
-    float radius;
-    Vector2 vel;
-    std::vector<Vector2> points;
-
-    Asteroid(Vector2 pos_, int size_)
-    {
-        pos = Vector2{pos_.x, pos_.y};
-        size = size_;
-        radius = ASTEROID_RADII.at(size);
-        vel = random_asteroid_velocity(size);
-        points = _generate_shape();
-    }
-
-    std::vector<Vector2> _generate_shape()
-    {
-        std::uniform_int_distribution<int> count_dist(10, 14);
-        std::uniform_real_distribution<float> radius_dist(0.7f, 1.1f);
-
-        int count = count_dist(gen);
-        std::vector<Vector2> pts;
-        for (int i = 0; i < count; i++)
-        {
-            float angle = (static_cast<float>(i) / static_cast<float>(count)) * 2.0f * M_PI;
-            float r = radius * radius_dist(gen);
-            pts.push_back(Vector2{std::cos(angle) * r, std::sin(angle) * r});
-        }
-        return pts;
-    }
-
-    void update(float dt)
-    {
-        pos = vec_add(pos, vec_scale(vel, dt));
-        pos = wrap_position(pos);
-    }
-
-    void draw()
-    {
-        int count = points.size();
-        for (int i = 0; i < count; i++)
-        {
-            Vector2 a = points[i];
-            Vector2 b = points[(i + 1) % count];
-            Vector2 pa = vec_add(pos, a);
-            Vector2 pb = vec_add(pos, b);
-            DrawLineV(pa, pb, LIGHTGRAY);
-        }
-    }
-};
-
-// Game class
-class Game
-{
-public:
     Player player;
-    std::vector<Bullet *> bullets;
-    std::vector<Asteroid *> asteroids;
-    int score;
-    int lives;
-    int wave;
-    bool game_over;
+    std::vector<Bullet> bullets;
+    std::vector<Asteroid> asteroids;
+    int score = 0;
+    int lives = LIVES_START;
+    int wave = 1;
+    bool gameOver = false;
 
     Game()
     {
-        score = 0;
-        lives = LIVES_START;
-        wave = 1;
-        game_over = false;
-        spawn_wave(wave);
+        SpawnWave();
     }
 
-    ~Game()
+    void SpawnWave()
     {
-        // Clean up dynamically allocated bullets and asteroids
-        for (Bullet *bullet : bullets)
-        {
-            delete bullet;
-        }
-        for (Asteroid *asteroid : asteroids)
-        {
-            delete asteroid;
-        }
-    }
-
-    void spawn_wave(int wave_num)
-    {
-        // Clean up existing asteroids
-        for (Asteroid *asteroid : asteroids)
-        {
-            delete asteroid;
-        }
         asteroids.clear();
-
-        int count = 3 + wave_num;
-        std::uniform_real_distribution<float> x_dist(0.0f, static_cast<float>(SCREEN_WIDTH));
-        std::uniform_real_distribution<float> y_dist(0.0f, static_cast<float>(SCREEN_HEIGHT));
+        int count = 3 + wave;
 
         for (int i = 0; i < count; i++)
         {
             Vector2 pos;
-            while (true)
+            do
             {
-                pos = Vector2{x_dist(gen), y_dist(gen)};
-                if (!circle_collision(pos, 80.0f, player.pos, 120.0f))
-                {
-                    break;
-                }
-            }
-            asteroids.push_back(new Asteroid(pos, 3));
+                pos = {RandomRange(0, SCREEN_WIDTH), RandomRange(0, SCREEN_HEIGHT)};
+            } while (CircleCollision(pos, 80, player.pos, 120));
+
+            asteroids.emplace_back(pos, 3);
         }
     }
 
-    void reset()
+    void Reset()
     {
         score = 0;
         lives = LIVES_START;
         wave = 1;
-        game_over = false;
-        player.reset();
-
-        // Clean up bullets
-        for (Bullet *bullet : bullets)
-        {
-            delete bullet;
-        }
+        gameOver = false;
+        player.Reset();
         bullets.clear();
-
-        spawn_wave(wave);
+        SpawnWave();
     }
 
-    void update(float dt)
+    void Update(float dt)
     {
-        if (game_over)
+        if (gameOver)
         {
             if (IsKeyPressed(KEY_ENTER))
-            {
-                reset();
-            }
+                Reset();
             return;
         }
 
-        player.update(dt);
+        player.Update(dt);
 
-        if (IsKeyDown(KEY_SPACE) || IsMouseButtonPressed(0))
-        {
-            Bullet *bullet = player.shoot();
-            if (bullet)
-            {
-                bullets.push_back(bullet);
-            }
-        }
+        if ((IsKeyDown(KEY_SPACE) || IsMouseButtonDown(MOUSE_LEFT_BUTTON) || IsGestureDetected(GESTURE_TAP)) && player.CanShoot())
+            bullets.push_back(player.Shoot());
 
-        for (Bullet *bullet : bullets)
-        {
-            bullet->update(dt);
-        }
+        for (auto &b : bullets)
+            b.Update(dt);
+        bullets.erase(std::remove_if(bullets.begin(), bullets.end(),
+                                     [](Bullet &b)
+                                     { return b.life <= 0; }),
+                      bullets.end());
 
-        // Remove bullets with life <= 0
-        bullets.erase(
-            std::remove_if(bullets.begin(), bullets.end(),
-                           [](Bullet *b)
-                           {
-                               if (b->life <= 0)
-                               {
-                                   delete b;
-                                   return true;
-                               }
-                               return false;
-                           }),
-            bullets.end());
+        for (auto &a : asteroids)
+            a.Update(dt);
 
-        for (Asteroid *asteroid : asteroids)
-        {
-            asteroid->update(dt);
-        }
-
-        handle_collisions();
+        HandleCollisions();
 
         if (asteroids.empty())
         {
             wave++;
             player.invuln = 2.0f;
-            spawn_wave(wave);
+            SpawnWave();
+        }
+        if (IsKeyPressed(KEY_F))
+        {
+#ifdef __EMSCRIPTEN__
+            emscripten_request_fullscreen("#canvas", EM_FALSE);
+#else
+            ToggleFullscreen();
+#endif
         }
     }
 
-    void handle_collisions()
+    void HandleCollisions()
     {
-        // Bullets vs Asteroids
-        std::vector<Asteroid *> new_asteroids;
-        std::vector<Asteroid *> remaining_asteroids;
+        std::vector<Asteroid> newAsteroids;
 
-        for (Asteroid *asteroid : asteroids)
+        for (auto &a : asteroids)
         {
             bool hit = false;
-            for (Bullet *bullet : bullets)
+            for (auto &b : bullets)
             {
-                if (circle_collision(bullet->pos, 2.0f, asteroid->pos, asteroid->radius))
+                if (CircleCollision(b.pos, 2, a.pos, a.radius))
                 {
-                    bullet->life = 0;
+                    b.life = 0;
                     hit = true;
-                    score += 10 * asteroid->size;
-                    if (asteroid->size > 1)
+                    score += 10 * a.size;
+
+                    if (a.size > 1)
                     {
                         for (int i = 0; i < 2; i++)
-                        {
-                            Asteroid *child = new Asteroid(asteroid->pos, asteroid->size - 1);
-                            child->vel = random_asteroid_velocity(asteroid->size - 1);
-                            new_asteroids.push_back(child);
-                        }
+                            newAsteroids.emplace_back(a.pos, a.size - 1);
                     }
                     break;
                 }
             }
+
             if (!hit)
-            {
-                remaining_asteroids.push_back(asteroid);
-            }
-            else
-            {
-                delete asteroid;
-            }
+                newAsteroids.push_back(a);
         }
 
-        asteroids = remaining_asteroids;
-        asteroids.insert(asteroids.end(), new_asteroids.begin(), new_asteroids.end());
+        asteroids = newAsteroids;
 
-        // Remove bullets with life <= 0
-        bullets.erase(
-            std::remove_if(bullets.begin(), bullets.end(),
-                           [](Bullet *b)
-                           {
-                               if (b->life <= 0)
-                               {
-                                   delete b;
-                                   return true;
-                               }
-                               return false;
-                           }),
-            bullets.end());
-
-        // Player vs Asteroids
         if (player.invuln <= 0)
         {
-            for (Asteroid *asteroid : asteroids)
+            for (auto &a : asteroids)
             {
-                if (circle_collision(player.pos, SHIP_RADIUS, asteroid->pos, asteroid->radius))
+                if (CircleCollision(player.pos, SHIP_RADIUS, a.pos, a.radius))
                 {
                     lives--;
-                    player.reset();
+                    player.Reset();
                     if (lives <= 0)
-                    {
-                        game_over = true;
-                    }
+                        gameOver = true;
                     break;
                 }
             }
         }
     }
 
-    void draw()
+    void Draw() const
     {
-        for (Asteroid *asteroid : asteroids)
-        {
-            asteroid->draw();
-        }
-        for (Bullet *bullet : bullets)
-        {
-            bullet->draw();
-        }
-        if (!game_over || player.invuln > 0)
-        {
-            player.draw();
-        }
+        for (auto &a : asteroids)
+            a.Draw();
+        for (auto &b : bullets)
+            b.Draw();
+        if (!gameOver || player.invuln > 0)
+            player.Draw();
 
         DrawText(TextFormat("Score: %d", score), 20, 20, 20, RAYWHITE);
         DrawText(TextFormat("Lives: %d", lives), 20, 45, 20, RAYWHITE);
         DrawText(TextFormat("Wave: %d", wave), 20, 70, 20, RAYWHITE);
 
-        if (game_over)
+        if (gameOver)
         {
-            const char *text = "GAME OVER";
-            const char *sub = "Press ENTER to restart";
-            int w = MeasureText(text, 48);
-            int sw = MeasureText(sub, 20);
-            DrawText(text, (SCREEN_WIDTH - w) / 2, SCREEN_HEIGHT / 2 - 40, 48, RED);
-            DrawText(sub, (SCREEN_WIDTH - sw) / 2, SCREEN_HEIGHT / 2 + 20, 20, RAYWHITE);
+            const char *t = "GAME OVER";
+            const char *s = "Press ENTER to restart";
+            DrawText(t, SCREEN_WIDTH / 2 - MeasureText(t, 48) / 2, SCREEN_HEIGHT / 2 - 40, 48, RED);
+            DrawText(s, SCREEN_WIDTH / 2 - MeasureText(s, 20) / 2, SCREEN_HEIGHT / 2 + 20, 20, RAYWHITE);
         }
     }
 };
 
-// Main function
+// --------------------------------------------------
+// Main
+// --------------------------------------------------
+Game game;
+
+void UpdateDrawFrame()
+{
+    float dt = GetFrameTime();
+
+    BeginDrawing();
+    ClearBackground({10, 12, 20, 255});
+
+    game.Update(dt);
+    game.Draw();
+
+    EndDrawing();
+}
+
 int main()
 {
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "ZayfireStudios - ZayDroids");
     SetTargetFPS(60);
+    srand((unsigned)time(nullptr));
 
-    // Load and set window icon
-    std::string icon_path = resource_path("favicon.png");
-    Image icon = LoadImage(icon_path.c_str());
+#if defined(PLATFORM_WEB)
+    bool rlDisableVao = true; // Force raylib to skip VAO calls
+#endif
+
+#ifndef PLATFORM_WEB
+    Image icon = LoadImageFromMemory(
+        ".png",
+        favicon_png,
+        favicon_png_len);
     SetWindowIcon(icon);
     UnloadImage(icon);
+#endif
 
-    Game game;
-
+#if defined(PLATFORM_WEB)
+    emscripten_set_main_loop(UpdateDrawFrame, 0, 1);
+#else
     while (!WindowShouldClose())
     {
-        float dt = GetFrameTime();
-
-        BeginDrawing();
-        ClearBackground(Color{10, 12, 20, 255});
-
-        game.update(dt);
-        game.draw();
-
-        EndDrawing();
+        UpdateDrawFrame();
     }
+    CloseWindow();
+#endif
 
     CloseWindow();
-
     return 0;
 }
